@@ -339,30 +339,17 @@ jobs:
             --data-binary @native-linux-riscv64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-riscv64.tar.gz"
 
-  build-freebsd:
+  build-freebsd-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: freebsd-x64
-            arch: x86_64
-            sync: rsync
-          - rid: freebsd-arm64
-            arch: aarch64
-            sync: rsync
-          - rid: freebsd-riscv64
-            arch: riscv64
-            sync: scp
     steps:
-      - name: Build ${{ matrix.rid }}
+      - name: Build freebsd-x64
         uses: vmactions/freebsd-vm@v1
         with:
           release: "14.4"
-          arch: ${{ matrix.arch }}
-          sync: ${{ matrix.sync }}
+          arch: x86_64
+          sync: rsync
           usesh: true
           run: |
             set -e
@@ -373,15 +360,13 @@ jobs:
               mkdir -p sqlite-src
               url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
               fetch -o sqlite.zip "$url"
-              unzip -q sqlite.zip -d sqlite-src
+              tar -xf sqlite.zip -C sqlite-src
             }
-
-            pkg install -y unzip
 
             fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
             srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-            mkdir -p out/runtimes/${{ matrix.rid }}/native
+            mkdir -p out/runtimes/freebsd-x64/native
 
             cc -shared -fPIC -O2 \
               -DSQLITE_THREADSAFE=1 \
@@ -390,14 +375,14 @@ jobs:
               -DSQLITE_ENABLE_JSON1 \
               -DSQLITE_ENABLE_COLUMN_METADATA \
               -DSQLITE_USE_URI=1 \
-              -o out/runtimes/${{ matrix.rid }}/native/libe_sqlite3.so \
+              -o out/runtimes/freebsd-x64/native/libe_sqlite3.so \
               "$srcdir/sqlite3.c" -lpthread
 
-            nm -g out/runtimes/${{ matrix.rid }}/native/libe_sqlite3.so | grep 'sqlite3_open'
-            nm -g out/runtimes/${{ matrix.rid }}/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
-            nm -g out/runtimes/${{ matrix.rid }}/native/libe_sqlite3.so | grep 'sqlite3_close'
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_close'
 
-            tar -C out -czf native-${{ matrix.rid }}.tar.gz .
+            tar -C out -czf native-freebsd-x64.tar.gz .
 
       - name: Upload temporary asset
         shell: bash
@@ -408,8 +393,122 @@ jobs:
             -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Content-Type: application/gzip" \
-            --data-binary @native-${{ matrix.rid }}.tar.gz \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-${{ matrix.rid }}.tar.gz"
+            --data-binary @native-freebsd-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-x64.tar.gz"
+
+  build-freebsd-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Build freebsd-arm64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.4"
+          arch: aarch64
+          sync: rsync
+          usesh: true
+          run: |
+            set -e
+
+            fetch_sqlite() {
+              code="$1"
+              year="$2"
+              mkdir -p sqlite-src
+              url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+              fetch -o sqlite.zip "$url"
+              tar -xf sqlite.zip -C sqlite-src
+            }
+
+            fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+            srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+            mkdir -p out/runtimes/freebsd-arm64/native
+
+            cc -shared -fPIC -O2 \
+              -DSQLITE_THREADSAFE=1 \
+              -DSQLITE_ENABLE_FTS5 \
+              -DSQLITE_ENABLE_RTREE \
+              -DSQLITE_ENABLE_JSON1 \
+              -DSQLITE_ENABLE_COLUMN_METADATA \
+              -DSQLITE_USE_URI=1 \
+              -o out/runtimes/freebsd-arm64/native/libe_sqlite3.so \
+              "$srcdir/sqlite3.c" -lpthread
+
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_close'
+
+            tar -C out -czf native-freebsd-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-freebsd-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-arm64.tar.gz"
+
+  build-freebsd-riscv64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build freebsd-riscv64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.4"
+          arch: riscv64
+          sync: scp
+          usesh: true
+          run: |
+            set -e
+
+            fetch_sqlite() {
+              code="$1"
+              year="$2"
+              mkdir -p sqlite-src
+              url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+              fetch -o sqlite.zip "$url"
+              tar -xf sqlite.zip -C sqlite-src
+            }
+
+            fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+            srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+            mkdir -p out/runtimes/freebsd-riscv64/native
+
+            cc -shared -fPIC -O2 \
+              -DSQLITE_THREADSAFE=1 \
+              -DSQLITE_ENABLE_FTS5 \
+              -DSQLITE_ENABLE_RTREE \
+              -DSQLITE_ENABLE_JSON1 \
+              -DSQLITE_ENABLE_COLUMN_METADATA \
+              -DSQLITE_USE_URI=1 \
+              -o out/runtimes/freebsd-riscv64/native/libe_sqlite3.so \
+              "$srcdir/sqlite3.c" -lpthread
+
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_close'
+
+            tar -C out -czf native-freebsd-riscv64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-freebsd-riscv64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-riscv64.tar.gz"
 
   build-macos-x64:
     needs: resolve
@@ -609,7 +708,9 @@ jobs:
       - build-linux-x64
       - build-linux-arm64
       - build-linux-riscv64
-      - build-freebsd
+      - build-freebsd-x64
+      - build-freebsd-arm64
+      - build-freebsd-riscv64
       - build-macos-x64
       - build-macos-arm64
       - build-windows-x64
