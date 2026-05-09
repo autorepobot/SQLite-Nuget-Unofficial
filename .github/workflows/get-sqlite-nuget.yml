@@ -339,6 +339,70 @@ jobs:
             --data-binary @native-linux-riscv64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-riscv64.tar.gz"
 
+  build-linux-loongarch64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: tcwzb
+    steps:
+      - name: Build linux-loongarch64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          sudo apt-get update
+          sudo apt-get install -y gcc curl unzip binutils file
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-loongarch64/native
+
+          gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-loongarch64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-loongarch64/native/libe_sqlite3.so
+          readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so
+
+          flags="$(readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep 'Flags:')"
+          echo "$flags"
+
+          if ! echo "$flags" | grep -q 'OBJ-v1'; then
+            echo "Not a LoongArch new-world OBJ-v1 binary" >&2
+            exit 1
+          fi
+
+          nm -D out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-loongarch64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-loongarch64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-loongarch64.tar.gz"
+
   build-freebsd-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -708,6 +772,7 @@ jobs:
       - build-linux-x64
       - build-linux-arm64
       - build-linux-riscv64
+      - build-linux-loongarch64
       - build-freebsd-x64
       - build-freebsd-arm64
       - build-freebsd-riscv64
