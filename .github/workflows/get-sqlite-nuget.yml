@@ -342,7 +342,7 @@ jobs:
   build-linux-loongarch64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: tcwzb
+    runs-on: ubuntu-24.04
     steps:
       - name: Build linux-loongarch64
         shell: bash
@@ -359,14 +359,18 @@ jobs:
           }
 
           sudo apt-get update
-          sudo apt-get install -y gcc curl unzip binutils file
+          sudo apt-get install -y \
+            curl unzip file \
+            gcc-loongarch64-linux-gnu \
+            binutils-loongarch64-linux-gnu \
+            libc6-dev-loong64-cross
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
           mkdir -p out/runtimes/linux-loongarch64/native
 
-          gcc -shared -fPIC -O2 \
+          loongarch64-linux-gnu-gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -377,9 +381,9 @@ jobs:
             "$srcdir/sqlite3.c" -ldl -lpthread
 
           file out/runtimes/linux-loongarch64/native/libe_sqlite3.so
-          readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so
+          loongarch64-linux-gnu-readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so
 
-          flags="$(readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep 'Flags:')"
+          flags="$(loongarch64-linux-gnu-readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep 'Flags:')"
           echo "$flags"
 
           if ! echo "$flags" | grep -q 'OBJ-v1'; then
@@ -387,7 +391,7 @@ jobs:
             exit 1
           fi
 
-          nm -D out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep ' sqlite3_open'
+          loongarch64-linux-gnu-nm -D out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep ' sqlite3_open'
 
           tar -C out -czf native-linux-loongarch64.tar.gz .
 
