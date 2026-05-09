@@ -343,6 +343,8 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
     steps:
       - name: Build linux-loongarch64
         shell: bash
@@ -358,9 +360,12 @@ jobs:
             unzip -q sqlite.zip -d sqlite-src
           }
 
-          sudo apt-get update
-          sudo apt-get install -y \
-            curl unzip file \
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
             gcc-loongarch64-linux-gnu \
             binutils-loongarch64-linux-gnu \
             libc6-dev-loong64-cross
