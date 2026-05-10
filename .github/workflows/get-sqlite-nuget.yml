@@ -775,6 +775,54 @@ jobs:
             --data-binary "@native-win-arm64.zip" `
             "https://uploads.github.com/repos/${env:GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-win-arm64.zip"
 
+  build-windows-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: windows-2025
+    steps:
+      - name: Build win-x86
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $code = "${{ needs.resolve.outputs.sqlite_code }}"
+          $year = "${{ needs.resolve.outputs.sqlite_year }}"
+          $url = "https://www.sqlite.org/$year/sqlite-amalgamation-$code.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+
+          if (!(Test-Path sqlite.zip)) {
+            throw "Failed to download SQLite amalgamation"
+          }
+
+          Expand-Archive sqlite.zip -DestinationPath sqlite-src -Force
+          $srcdir = Get-ChildItem sqlite-src -Directory | Where-Object { $_.Name -like "sqlite-amalgamation-*" } | Select-Object -First 1
+
+          New-Item -ItemType Directory -Force -Path out\runtimes\win-x86\native | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsinstall = & $vswhere -latest -products * -property installationPath
+
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x86 && cl /LD /O2 /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /OUT:out\runtimes\win-x86\native\e_sqlite3.dll"
+
+          if (!(Test-Path "out\runtimes\win-x86\native\e_sqlite3.dll")) {
+            throw "DLL not found, build likely failed"
+          }
+
+          Compress-Archive -Path out\* -DestinationPath native-win-x86.zip -Force
+
+      - name: Upload temporary asset
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl.exe -f -s -S `
+            -X POST `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary "@native-win-x86.zip" `
+            "https://uploads.github.com/repos/${env:GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-win-x86.zip"
+
   pack-and-publish:
     needs:
       - resolve
@@ -789,6 +837,7 @@ jobs:
       - build-macos-arm64
       - build-windows-x64
       - build-windows-arm64
+      - build-windows-x86
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
     steps:
