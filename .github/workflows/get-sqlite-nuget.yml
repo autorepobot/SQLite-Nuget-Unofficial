@@ -412,6 +412,60 @@ jobs:
             --data-binary @native-linux-loongarch64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-loongarch64.tar.gz"
 
+  build-linux-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build linux-x86
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-multilib curl unzip file
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-x86/native
+
+          gcc -m32 -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-x86/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-x86/native/libe_sqlite3.so
+          nm -D out/runtimes/linux-x86/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-x86.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-x86.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-x86.tar.gz"
+
   build-freebsd-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -827,6 +881,7 @@ jobs:
     needs:
       - resolve
       - build-linux-x64
+      - build-linux-x86
       - build-linux-arm64
       - build-linux-riscv64
       - build-linux-loongarch64
