@@ -783,16 +783,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y curl unzip file
 
-          curl -fL "https://github.com/autorepobot/toolchains/releases/download/musl/arm-linux-musleabihf-cross.tgz" -o musl-cross.tgz
+          curl --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -fL "https://github.com/autorepobot/muslcc-cross-builder/releases/download/0.0.0.1/armv7l-linux-musleabihf-cross.tgz" \
+            -o musl-cross.tgz
+
           tar -xzf musl-cross.tgz
-          export PATH="$PWD/arm-linux-musleabihf-cross/bin:$PATH"
+          export PATH="$PWD/armv7l-linux-musleabihf-cross/bin:$PATH"
 
           mkdir -p sqlite-src out/runtimes/linux-musl-arm/native
           curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          arm-linux-musleabihf-gcc -shared -fPIC -O2 \
+          armv7l-linux-musleabihf-gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -804,6 +807,18 @@ jobs:
 
           file out/runtimes/linux-musl-arm/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-arm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-arm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-arm.tar.gz"
 
   build-linux-musl-arm64:
     needs: resolve
@@ -878,9 +893,12 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update
-          sudo apt-get install -y curl unzip file xz-utils
+          sudo apt-get install -y curl unzip file
 
-          curl -fL https://musl.cc/s390x-linux-musl-cross.tgz -o musl-cross.tgz
+          curl --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -fL "https://github.com/autorepobot/muslcc-cross-builder/releases/download/0.0.0.1/s390x-linux-musl-cross.tgz" \
+            -o musl-cross.tgz
+
           tar -xzf musl-cross.tgz
           export PATH="$PWD/s390x-linux-musl-cross/bin:$PATH"
 
@@ -901,6 +919,18 @@ jobs:
 
           file out/runtimes/linux-musl-s390x/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-s390x.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-s390x.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-s390x.tar.gz"
 
   build-freebsd-x64:
     needs: resolve
