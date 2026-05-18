@@ -339,6 +339,65 @@ jobs:
             --data-binary @native-linux-riscv64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-riscv64.tar.gz"
 
+  build-linux-sparc64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+    steps:
+      - name: Build linux-sparc64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
+            gcc-sparc64-linux-gnu \
+            binutils-sparc64-linux-gnu \
+            libc6-dev-sparc64-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-sparc64/native
+
+          curl -fL \
+            "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
+            -o sqlite.zip
+
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          sparc64-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-sparc64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-sparc64/native/libe_sqlite3.so
+          sparc64-linux-gnu-readelf -h out/runtimes/linux-sparc64/native/libe_sqlite3.so
+          sparc64-linux-gnu-nm -D out/runtimes/linux-sparc64/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-sparc64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-sparc64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-sparc64.tar.gz"
+
   build-linux-loongarch64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -2044,6 +2103,7 @@ jobs:
       - build-linux-ppc64
       - build-linux-ppc64le
       - build-linux-s390x
+      - build-linux-sparc64
       - build-linux-arm
       - build-linux-armel
       - build-linux-m68k
