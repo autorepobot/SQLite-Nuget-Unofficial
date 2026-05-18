@@ -737,7 +737,7 @@ jobs:
   build-linux-musl-arm64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     container: alpine:edge
     steps:
       - name: Build linux-musl-arm64
@@ -745,14 +745,14 @@ jobs:
         run: |
           set -eu
 
-          apk add --no-cache build-base curl unzip file gcc-aarch64
+          apk add --no-cache build-base curl unzip file
 
           mkdir -p sqlite-src out/runtimes/linux-musl-arm64/native
           curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          aarch64-alpine-linux-musl-gcc -shared -fPIC -O2 \
+          gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -765,22 +765,10 @@ jobs:
           file out/runtimes/linux-musl-arm64/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-arm64.tar.gz .
 
-      - name: Upload temporary asset
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsSL \
-            -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @native-linux-musl-arm64.tar.gz \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-arm64.tar.gz"
-
   build-linux-musl-riscv64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-riscv
     container: alpine:edge
     steps:
       - name: Build linux-musl-riscv64
@@ -788,14 +776,14 @@ jobs:
         run: |
           set -eu
 
-          apk add --no-cache build-base curl unzip file gcc-riscv64
+          apk add --no-cache build-base curl unzip file
 
           mkdir -p sqlite-src out/runtimes/linux-musl-riscv64/native
           curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          riscv64-alpine-linux-musl-gcc -shared -fPIC -O2 \
+          gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -808,37 +796,29 @@ jobs:
           file out/runtimes/linux-musl-riscv64/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-riscv64.tar.gz .
 
-      - name: Upload temporary asset
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsSL \
-            -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @native-linux-musl-riscv64.tar.gz \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-riscv64.tar.gz"
-
   build-linux-musl-s390x:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
-    container: alpine:edge
     steps:
       - name: Build linux-musl-s390x
-        shell: sh
+        shell: bash
         run: |
-          set -eu
+          set -euo pipefail
 
-          apk add --no-cache build-base curl unzip file gcc-s390x
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file xz-utils
+
+          curl -fL https://musl.cc/s390x-linux-musl-cross.tgz -o musl-cross.tgz
+          tar -xzf musl-cross.tgz
+          export PATH="$PWD/s390x-linux-musl-cross/bin:$PATH"
 
           mkdir -p sqlite-src out/runtimes/linux-musl-s390x/native
           curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          s390x-alpine-linux-musl-gcc -shared -fPIC -O2 \
+          s390x-linux-musl-gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -850,18 +830,6 @@ jobs:
 
           file out/runtimes/linux-musl-s390x/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-s390x.tar.gz .
-
-      - name: Upload temporary asset
-        shell: sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          curl -fsSL \
-            -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @native-linux-musl-s390x.tar.gz \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-s390x.tar.gz"
 
   build-freebsd-x64:
     needs: resolve
