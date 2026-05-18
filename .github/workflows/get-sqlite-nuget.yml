@@ -466,6 +466,72 @@ jobs:
             --data-binary @native-linux-x86.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-x86.tar.gz"
 
+  build-linux-ppc64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+
+    steps:
+      - name: Build linux-ppc64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
+            gcc-powerpc64-linux-gnu \
+            binutils-powerpc64-linux-gnu \
+            libc6-dev-ppc64-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-ppc64/native
+
+          curl -fL \
+            "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
+            -o sqlite.zip
+
+          unzip -q sqlite.zip -d sqlite-src
+
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          powerpc64-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-ppc64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-ppc64/native/libe_sqlite3.so
+
+          powerpc64-linux-gnu-readelf -h \
+            out/runtimes/linux-ppc64/native/libe_sqlite3.so
+
+          powerpc64-linux-gnu-nm -D \
+            out/runtimes/linux-ppc64/native/libe_sqlite3.so \
+            | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-ppc64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-ppc64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-ppc64.tar.gz"
+
   build-linux-ppc64le:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -1857,6 +1923,7 @@ jobs:
       - build-linux-arm64
       - build-linux-riscv64
       - build-linux-loongarch64
+      - build-linux-ppc64
       - build-linux-ppc64le
       - build-linux-s390x
       - build-linux-arm
