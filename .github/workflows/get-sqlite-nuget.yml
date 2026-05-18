@@ -852,14 +852,14 @@ jobs:
             --data-binary @native-linux-m68k.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-m68k.tar.gz"
 
-  build-linux-m68k:
+  build-linux-sh4:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
     container:
       image: debian:sid
     steps:
-      - name: Build linux-m68k
+      - name: Build linux-sh4
         shell: bash
         run: |
           set -euo pipefail
@@ -870,11 +870,11 @@ jobs:
             curl \
             unzip \
             file \
-            gcc-m68k-linux-gnu \
-            binutils-m68k-linux-gnu \
-            libc6-dev-m68k-cross
+            gcc-sh4-linux-gnu \
+            binutils-sh4-linux-gnu \
+            libc6-dev-sh4-cross
 
-          mkdir -p sqlite-src out/runtimes/linux-m68k/native
+          mkdir -p sqlite-src out/runtimes/linux-sh4/native
 
           curl -fL \
             "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
@@ -883,21 +883,21 @@ jobs:
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          m68k-linux-gnu-gcc -shared -fPIC -O2 \
+          sh4-linux-gnu-gcc -shared -fPIC -O2 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
             -DSQLITE_ENABLE_JSON1 \
             -DSQLITE_ENABLE_COLUMN_METADATA \
             -DSQLITE_USE_URI=1 \
-            -o out/runtimes/linux-m68k/native/libe_sqlite3.so \
+            -o out/runtimes/linux-sh4/native/libe_sqlite3.so \
             "$srcdir/sqlite3.c" -ldl -lpthread
 
-          file out/runtimes/linux-m68k/native/libe_sqlite3.so
-          m68k-linux-gnu-readelf -h out/runtimes/linux-m68k/native/libe_sqlite3.so
-          m68k-linux-gnu-nm -D out/runtimes/linux-m68k/native/libe_sqlite3.so | grep ' sqlite3_open'
+          file out/runtimes/linux-sh4/native/libe_sqlite3.so
+          sh4-linux-gnu-readelf -h out/runtimes/linux-sh4/native/libe_sqlite3.so
+          sh4-linux-gnu-nm -D out/runtimes/linux-sh4/native/libe_sqlite3.so | grep ' sqlite3_open'
 
-          tar -C out -czf native-linux-m68k.tar.gz .
+          tar -C out -czf native-linux-sh4.tar.gz .
 
       - name: Upload temporary asset
         shell: bash
@@ -908,8 +908,8 @@ jobs:
             -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Content-Type: application/gzip" \
-            --data-binary @native-linux-m68k.tar.gz \
-            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-m68k.tar.gz"
+            --data-binary @native-linux-sh4.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-sh4.tar.gz"
 
   build-linux-musl-x64:
     needs: resolve
