@@ -531,7 +531,6 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: debian:sid
-
     steps:
       - name: Build linux-ppc64
         shell: bash
@@ -555,7 +554,6 @@ jobs:
             -o sqlite.zip
 
           unzip -q sqlite.zip -d sqlite-src
-
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
           powerpc64-linux-gnu-gcc -shared -fPIC -O2 \
@@ -569,13 +567,8 @@ jobs:
             "$srcdir/sqlite3.c" -ldl -lpthread
 
           file out/runtimes/linux-ppc64/native/libe_sqlite3.so
-
-          powerpc64-linux-gnu-readelf -h \
-            out/runtimes/linux-ppc64/native/libe_sqlite3.so
-
-          powerpc64-linux-gnu-nm -D \
-            out/runtimes/linux-ppc64/native/libe_sqlite3.so \
-            | grep ' sqlite3_open'
+          powerpc64-linux-gnu-readelf -h out/runtimes/linux-ppc64/native/libe_sqlite3.so
+          powerpc64-linux-gnu-nm -D out/runtimes/linux-ppc64/native/libe_sqlite3.so | grep ' sqlite3_open'
 
           tar -C out -czf native-linux-ppc64.tar.gz .
 
@@ -852,6 +845,18 @@ jobs:
           mips64el-linux-gnuabi64-readelf -h out/runtimes/linux-mips64le/native/libe_sqlite3.so
           tar -C out -czf native-linux-mips64le.tar.gz .
 
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-mips64le.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-mips64le.tar.gz"
+
   build-linux-m68k:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -1035,6 +1040,18 @@ jobs:
           file out/runtimes/linux-musl-arm64/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-arm64.tar.gz .
 
+      - name: Upload temporary asset
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-arm64.tar.gz"
+
   build-linux-musl-riscv64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -1065,6 +1082,18 @@ jobs:
 
           file out/runtimes/linux-musl-riscv64/native/libe_sqlite3.so
           tar -C out -czf native-linux-musl-riscv64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-riscv64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-riscv64.tar.gz"
 
   build-linux-musl-s390x:
     needs: resolve
@@ -2087,7 +2116,7 @@ jobs:
 
           mkdir -p assets package
 
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?per_page=100"
           curl -fsSL \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
