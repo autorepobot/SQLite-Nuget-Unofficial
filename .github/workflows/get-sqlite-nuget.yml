@@ -691,6 +691,42 @@ jobs:
             --data-binary @native-linux-mips64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-mips64.tar.gz"
 
+  build-linux-mips64le:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-mips64le
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file \
+            gcc-mips64el-linux-gnuabi64 \
+            binutils-mips64el-linux-gnuabi64 \
+            libc6-dev-mips64el-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-mips64le/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mips64el-linux-gnuabi64-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-mips64le/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-mips64le/native/libe_sqlite3.so
+          mips64el-linux-gnuabi64-readelf -h out/runtimes/linux-mips64le/native/libe_sqlite3.so
+          tar -C out -czf native-linux-mips64le.tar.gz .
+
   build-linux-musl-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
@@ -733,6 +769,41 @@ jobs:
             -H "Content-Type: application/gzip" \
             --data-binary @native-linux-musl-x64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-x64.tar.gz"
+
+  build-linux-musl-arm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build linux-musl-arm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          curl -fL "https://github.com/autorepobot/toolchains/releases/download/musl/arm-linux-musleabihf-cross.tgz" -o musl-cross.tgz
+          tar -xzf musl-cross.tgz
+          export PATH="$PWD/arm-linux-musleabihf-cross/bin:$PATH"
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-arm/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          arm-linux-musleabihf-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-arm/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-arm/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-arm.tar.gz .
 
   build-linux-musl-arm64:
     needs: resolve
@@ -1761,6 +1832,8 @@ jobs:
       - build-linux-arm
       - build-linux-armel
       - build-linux-mips64
+      - build-linux-mips64le
+      - build-linux-musl-arm
       - build-linux-musl-x64
       - build-linux-musl-arm64
       - build-linux-musl-riscv64
