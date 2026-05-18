@@ -1332,7 +1332,7 @@ jobs:
   build-iossimulator-x86:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - name: Build iossimulator-x86
         shell: bash
@@ -1372,7 +1372,7 @@ jobs:
   build-ios-arm:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - name: Build ios-arm
         shell: bash
