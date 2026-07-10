@@ -189,7 +189,7 @@ jobs:
   build-linux-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container:
       image: registry.access.redhat.com/ubi10/ubi
     steps:
@@ -216,6 +216,7 @@ jobs:
           mkdir -p out/runtimes/linux-x64/native
 
           gcc -shared -fPIC -O2 \
+            -D_GNU_SOURCE \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -242,7 +243,7 @@ jobs:
   build-linux-arm64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     container:
       image: registry.access.redhat.com/ubi10/ubi
     steps:
@@ -269,6 +270,7 @@ jobs:
           mkdir -p out/runtimes/linux-arm64/native
 
           gcc -shared -fPIC -O2 \
+            -D_GNU_SOURCE \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -322,6 +324,7 @@ jobs:
           mkdir -p out/runtimes/linux-riscv64/native
 
           gcc -shared -fPIC -O2 \
+            -D_GNU_SOURCE \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
