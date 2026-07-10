@@ -299,7 +299,7 @@ jobs:
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04-riscv
     container:
-      image: rockylinux:10
+      image: rockylinux/rockylinux:10
     steps:
       - name: Build linux-riscv64
         shell: bash
