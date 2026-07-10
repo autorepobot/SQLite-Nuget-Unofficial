@@ -376,7 +376,7 @@ jobs:
           unzip -q sqlite.zip -d sqlite-src
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
 
-          sparc64-linux-gnu-gcc -shared -fPIC -O2 \
+          sparc64-linux-gnu-gcc -shared -fPIC -O2 -fno-plt \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -440,7 +440,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-loongarch64/native
 
-          loongarch64-linux-gnu-gcc -shared -fPIC -O2 \
+          loongarch64-linux-gnu-gcc -shared -fPIC -O2  -fno-plt \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
