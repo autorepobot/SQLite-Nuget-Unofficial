@@ -215,7 +215,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-x64/native
 
-          gcc -shared -fPIC -O2 -std=c23 -fno-plt \
+          gcc -shared -fPIC -march=x86-64-v2 -O2 -std=c23 -fno-plt \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
