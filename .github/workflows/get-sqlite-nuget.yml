@@ -186,7 +186,7 @@ jobs:
           echo "temp_tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
-build-linux-x64:
+  build-linux-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04
