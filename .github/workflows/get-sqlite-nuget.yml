@@ -217,9 +217,9 @@ jobs:
 
           gcc -shared -fPIC -O2 \
             -Wl,-u,strlcpy \
-    	    -Wl,-z,pack-relative-relocs \
-	        -fno-semantic-interposition \
-	        -Wl,-Bsymbolic-functions \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -274,9 +274,9 @@ jobs:
 
           gcc -shared -fPIC -O2 \
             -Wl,-u,strlcpy \
-	        -Wl,-z,pack-relative-relocs \
-	        -fno-semantic-interposition \
-	        -Wl,-Bsymbolic-functions \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -331,9 +331,9 @@ jobs:
 
           gcc -shared -fPIC -O2 \
             -Wl,-u,strlcpy \
-	        -Wl,-z,pack-relative-relocs \
-	        -fno-semantic-interposition \
-	        -Wl,-Bsymbolic-functions \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -453,10 +453,10 @@ jobs:
           mkdir -p out/runtimes/linux-loongarch64/native
 
           loongarch64-linux-gnu-gcc -shared -fPIC -O2 \
-	        -Wl,-u,strlcpy \
-	        -Wl,-z,pack-relative-relocs \
-	        -fno-semantic-interposition \
-	        -Wl,-Bsymbolic-functions \
+            -Wl,-u,strlcpy \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
