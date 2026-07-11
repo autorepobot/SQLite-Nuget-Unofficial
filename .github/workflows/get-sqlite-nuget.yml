@@ -191,7 +191,7 @@ jobs:
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-26.04
     container:
-      image: fedora:44
+      image: registry.access.redhat.com/ubi10/ubi
     steps:
       - name: Build linux-x64
         shell: bash
@@ -242,7 +242,7 @@ jobs:
   build-linux-arm64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: fedora:44
+    runs-on: ubuntu-26.04-arm
     container:
       image: registry.access.redhat.com/ubi10/ubi
     steps:
