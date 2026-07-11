@@ -215,7 +215,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-x64/native
 
-          gcc -shared -fPIC -march=x86-64-v2 -O2 -std=c23 -fno-plt \
+          gcc -shared -fPIC -march=x86-64-v2 -O2 -std=c23 -fno-plt -fhardened \
             -D_FORTIFY_SOURCE=3 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
@@ -269,7 +269,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-arm64/native
 
-          gcc -shared -fPIC -march=armv8.1-a -O2 -std=c23 -fno-plt \
+          gcc -shared -fPIC -march=armv8.1-a -O2 -std=c23 -fno-plt -fhardened \
             -D_FORTIFY_SOURCE=3 \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
