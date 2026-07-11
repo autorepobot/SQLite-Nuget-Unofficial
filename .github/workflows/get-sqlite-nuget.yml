@@ -189,7 +189,9 @@ jobs:
   build-linux-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
     steps:
       - name: Build linux-x64
         shell: bash
@@ -205,8 +207,8 @@ jobs:
             unzip -q sqlite.zip -d sqlite-src
           }
 
-          sudo apt-get update
-          sudo apt-get install -y gcc curl unzip
+          dnf update -y
+          dnf install -y gcc curl unzip tar gzip
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -214,6 +216,10 @@ jobs:
           mkdir -p out/runtimes/linux-x64/native
 
           gcc -shared -fPIC -O2 \
+            -Wl,-u,strlcpy \
+	    -Wl,-z,pack-relative-relocs \
+	    -fno-semantic-interposition \
+	    -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -240,7 +246,9 @@ jobs:
   build-linux-arm64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
     steps:
       - name: Build linux-arm64
         shell: bash
@@ -256,8 +264,8 @@ jobs:
             unzip -q sqlite.zip -d sqlite-src
           }
 
-          sudo apt-get update
-          sudo apt-get install -y gcc curl unzip
+          dnf update -y
+          dnf install -y gcc curl unzip tar gzip
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -265,6 +273,10 @@ jobs:
           mkdir -p out/runtimes/linux-arm64/native
 
           gcc -shared -fPIC -O2 \
+            -Wl,-u,strlcpy \
+	    -Wl,-z,pack-relative-relocs \
+	    -fno-semantic-interposition \
+	    -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -292,6 +304,8 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-24.04-riscv
+    container:
+      image: rockylinux/rockylinux:10
     steps:
       - name: Build linux-riscv64
         shell: bash
@@ -307,8 +321,8 @@ jobs:
             unzip -q sqlite.zip -d sqlite-src
           }
 
-          sudo apt-get update
-          sudo apt-get install -y gcc curl unzip
+          dnf update -y
+          dnf install -y gcc curl unzip tar gzip
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -316,6 +330,10 @@ jobs:
           mkdir -p out/runtimes/linux-riscv64/native
 
           gcc -shared -fPIC -O2 \
+            -Wl,-u,strlcpy \
+	    -Wl,-z,pack-relative-relocs \
+	    -fno-semantic-interposition \
+	    -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -435,6 +453,10 @@ jobs:
           mkdir -p out/runtimes/linux-loongarch64/native
 
           loongarch64-linux-gnu-gcc -shared -fPIC -O2 \
+	    -Wl,-u,strlcpy \
+	    -Wl,-z,pack-relative-relocs \
+	    -fno-semantic-interposition \
+	    -Wl,-Bsymbolic-functions \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
