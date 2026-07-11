@@ -217,7 +217,7 @@ jobs:
 
           gcc -shared -fPIC -march=x86-64-v2 -O2 -std=c23 -fno-plt -fhardened \
             -Wl,-u,strlcpy \
-            -Wl,-Bsymbolic-functions
+            -Wl,-Bsymbolic-functions \
             -fno-semantic-interposition \
             -Wl,-z,pack-relative-relocs \
             -D_FORTIFY_SOURCE=3 \
@@ -275,7 +275,7 @@ jobs:
 
           gcc -shared -fPIC -march=armv8.1-a -O2 -std=c23 -fno-plt -fhardened \
             -Wl,-u,strlcpy \
-            -Wl,-Bsymbolic-functions
+            -Wl,-Bsymbolic-functions \
             -fno-semantic-interposition \
             -Wl,-z,pack-relative-relocs \
             -D_FORTIFY_SOURCE=3 \
@@ -333,7 +333,7 @@ jobs:
 
           gcc -shared -fPIC -O2 -std=c23 -fno-plt \
             -Wl,-u,strlcpy \
-            -Wl,-Bsymbolic-functions
+            -Wl,-Bsymbolic-functions \
             -fno-semantic-interposition \
             -Wl,-z,pack-relative-relocs \
             -DSQLITE_THREADSAFE=1 \
@@ -456,7 +456,7 @@ jobs:
 
           loongarch64-linux-gnu-gcc -shared -fPIC -O2  -fno-plt \
             -Wl,-u,strlcpy \
-            -Wl,-Bsymbolic-functions
+            -Wl,-Bsymbolic-functions \
             -fno-semantic-interposition \
             -Wl,-z,pack-relative-relocs \
             -DSQLITE_THREADSAFE=1 \
