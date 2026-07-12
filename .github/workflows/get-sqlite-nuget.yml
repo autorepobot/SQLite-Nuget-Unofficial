@@ -220,6 +220,7 @@ jobs:
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
             -Wl,-Bsymbolic-functions \
+            -flto=auto \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -277,6 +278,7 @@ jobs:
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
             -Wl,-Bsymbolic-functions \
+            -flto=auto \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -334,6 +336,7 @@ jobs:
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
             -Wl,-Bsymbolic-functions \
+            -flto=auto \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
@@ -457,6 +460,7 @@ jobs:
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
             -Wl,-Bsymbolic-functions \
+            -flto=auto \
             -DSQLITE_THREADSAFE=1 \
             -DSQLITE_ENABLE_FTS5 \
             -DSQLITE_ENABLE_RTREE \
