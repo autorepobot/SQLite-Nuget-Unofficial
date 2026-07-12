@@ -216,6 +216,9 @@ jobs:
           mkdir -p out/runtimes/linux-x64/native
 
           gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -275,6 +278,9 @@ jobs:
           mkdir -p out/runtimes/linux-arm64/native
 
           gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -334,6 +340,9 @@ jobs:
           mkdir -p out/runtimes/linux-riscv64/native
 
           gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -459,6 +468,9 @@ jobs:
           mkdir -p out/runtimes/linux-loongarch64/native
 
           loongarch64-linux-gnu-gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
