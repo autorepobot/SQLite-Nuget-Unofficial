@@ -215,7 +215,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-x64/native
 
-          gcc -shared -fPIC -O2 \
+          gcc -shared -fPIC -s -O2 \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -272,7 +272,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-arm64/native
 
-          gcc -shared -fPIC -O2 \
+          gcc -shared -fPIC -s -O2 \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -329,7 +329,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-riscv64/native
 
-          gcc -shared -fPIC -O2 \
+          gcc -shared -fPIC -s -O2 \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -452,7 +452,7 @@ jobs:
 
           mkdir -p out/runtimes/linux-loongarch64/native
 
-          loongarch64-linux-gnu-gcc -shared -fPIC -O2 \
+          loongarch64-linux-gnu-gcc -shared -fPIC -s -O2 \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
