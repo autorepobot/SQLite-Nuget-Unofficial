@@ -219,6 +219,7 @@ jobs:
             -fvisibility=hidden \
             -DSQLITE_API="__attribute__((visibility(\"default\")))" \
             -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -281,6 +282,7 @@ jobs:
             -fvisibility=hidden \
             -DSQLITE_API="__attribute__((visibility(\"default\")))" \
             -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -343,6 +345,7 @@ jobs:
             -fvisibility=hidden \
             -DSQLITE_API="__attribute__((visibility(\"default\")))" \
             -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
@@ -471,6 +474,7 @@ jobs:
             -fvisibility=hidden \
             -DSQLITE_API="__attribute__((visibility(\"default\")))" \
             -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
             -Wl,-u,strlcpy \
             -Wl,-z,pack-relative-relocs \
             -fno-semantic-interposition \
