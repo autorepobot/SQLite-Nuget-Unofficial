@@ -1976,7 +1976,7 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsinstall = & $vswhere -latest -products * -property installationPath
 
-          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x64 && cl /LD /O2 /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /OUT:out\runtimes\win-x64\native\e_sqlite3.dll"
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x64 && cl /LD /O2 /GL /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OUT:out\runtimes\win-x64\native\e_sqlite3.dll"
 
           if (!(Test-Path "out\runtimes\win-x64\native\e_sqlite3.dll")) {
             throw "DLL not found, build likely failed"
@@ -2024,7 +2024,7 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsinstall = & $vswhere -latest -products * -property installationPath
 
-          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" arm64 && cl /LD /O2 /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /OUT:out\runtimes\win-arm64\native\e_sqlite3.dll"
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" arm64 && cl /LD /O2 /GL /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OUT:out\runtimes\win-arm64\native\e_sqlite3.dll"
 
           if (!(Test-Path "out\runtimes\win-arm64\native\e_sqlite3.dll")) {
             throw "DLL not found, build likely failed"
@@ -2072,8 +2072,8 @@ jobs:
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsinstall = & $vswhere -latest -products * -property installationPath
 
-          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x86 && cl /LD /O2 /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /OUT:out\runtimes\win-x86\native\e_sqlite3.dll"
-
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x86 && cl /LD /O2 /GL /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OUT:out\runtimes\win-x86\native\e_sqlite3.dll"
+          
           if (!(Test-Path "out\runtimes\win-x86\native\e_sqlite3.dll")) {
             throw "DLL not found, build likely failed"
           }
