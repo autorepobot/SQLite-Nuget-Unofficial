@@ -210,7 +210,7 @@ jobs:
           dnf update -y
           dnf install -y curl unzip tar gzip
 
-          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-x64.zip" -o toolchain.zip
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-x64.zip" -o toolchain.zip
           unzip -q toolchain.zip -d toolchain-extracted
           TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
           TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
@@ -280,7 +280,7 @@ jobs:
           dnf update -y
           dnf install -y curl unzip tar gzip
 
-          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-arm64-to-arm64.zip" -o toolchain.zip
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-arm64-to-arm64.zip" -o toolchain.zip
           unzip -q toolchain.zip -d toolchain-extracted
           TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
           TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
@@ -350,7 +350,7 @@ jobs:
           dnf update -y
           dnf install -y curl unzip tar gzip
 
-          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-riscv64.zip" -o toolchain.zip
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-riscv64.zip" -o toolchain.zip
           unzip -q toolchain.zip -d toolchain-extracted
           TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
           TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
@@ -480,7 +480,7 @@ jobs:
           dnf update -y
           dnf install -y curl unzip tar gzip file
 
-          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-loong64.zip" -o toolchain.zip
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-loong64.zip" -o toolchain.zip
           unzip -q toolchain.zip -d toolchain-extracted
           TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
           TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
