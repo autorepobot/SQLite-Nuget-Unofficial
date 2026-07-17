@@ -1210,12 +1210,12 @@ jobs:
   build-freebsd-x64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Build freebsd-x64
         uses: vmactions/freebsd-vm@v1
         with:
-          release: "14.4"
+          release: "15.1"
           arch: x86_64
           sync: rsync
           usesh: true
@@ -1267,12 +1267,12 @@ jobs:
   build-freebsd-arm64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - name: Build freebsd-arm64
         uses: vmactions/freebsd-vm@v1
         with:
-          release: "14.4"
+          release: "15.1"
           arch: aarch64
           sync: rsync
           usesh: true
@@ -1324,12 +1324,12 @@ jobs:
   build-freebsd-riscv64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Build freebsd-riscv64
         uses: vmactions/freebsd-vm@v1
         with:
-          release: "14.4"
+          release: "15.1"
           arch: riscv64
           sync: scp
           usesh: true
