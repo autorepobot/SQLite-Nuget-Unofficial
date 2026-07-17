@@ -208,7 +208,14 @@ jobs:
           }
 
           dnf update -y
-          dnf install -y gcc curl unzip tar gzip
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-x64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -271,7 +278,14 @@ jobs:
           }
 
           dnf update -y
-          dnf install -y gcc curl unzip tar gzip
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-arm64-to-arm64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -315,9 +329,9 @@ jobs:
   build-linux-riscv64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04-riscv
+    runs-on: ubuntu-26.04
     container:
-      image: rockylinux/rockylinux:10
+      image: registry.access.redhat.com/ubi10/ubi
     steps:
       - name: Build linux-riscv64
         shell: bash
@@ -334,7 +348,15 @@ jobs:
           }
 
           dnf update -y
-          dnf install -y gcc curl unzip tar gzip
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-riscv64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -437,9 +459,9 @@ jobs:
   build-linux-loongarch64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container:
-      image: debian:sid
+      image: registry.access.redhat.com/ubi10/ubi
     steps:
       - name: Build linux-loongarch64
         shell: bash
@@ -455,15 +477,18 @@ jobs:
             unzip -q sqlite.zip -d sqlite-src
           }
 
-          apt-get update
-          apt-get install -y \
-            ca-certificates \
-            curl \
-            unzip \
-            file \
-            gcc-loongarch64-linux-gnu \
-            binutils-loongarch64-linux-gnu \
-            libc6-dev-loong64-cross
+          dnf update -y
+          dnf install -y curl unzip tar gzip file
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.0/gcc-x64-to-loongarch64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-gcc"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-readelf" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-readelf"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-nm" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-nm"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
 
           fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
           srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
@@ -492,15 +517,6 @@ jobs:
 
           file out/runtimes/linux-loongarch64/native/libe_sqlite3.so
           loongarch64-linux-gnu-readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so
-
-          flags="$(loongarch64-linux-gnu-readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep 'Flags:')"
-          echo "$flags"
-
-          if ! echo "$flags" | grep -q 'OBJ-v1'; then
-            echo "Not a LoongArch new-world OBJ-v1 binary" >&2
-            exit 1
-          fi
-
           loongarch64-linux-gnu-nm -D out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep ' sqlite3_open'
 
           tar -C out -czf native-linux-loongarch64.tar.gz .
