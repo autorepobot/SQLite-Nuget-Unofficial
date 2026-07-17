@@ -456,7 +456,7 @@ jobs:
             --data-binary @native-linux-sparc64.tar.gz \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-sparc64.tar.gz"
 
-build-linux-loongarch64:
+  build-linux-loongarch64:
     needs: resolve
     if: needs.resolve.outputs.package_exists != 'true'
     runs-on: ubuntu-26.04
