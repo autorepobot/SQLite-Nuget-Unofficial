@@ -1,0 +1,2319 @@
+name: get sqlite nuget
+
+on:
+  workflow_dispatch:
+    inputs:
+      sqlite_version:
+        description: "SQLite version: 3.53.0, v3.53.0, or version-3.53.0. Empty = latest"
+        required: false
+        type: string
+      package_type:
+        description: "Package version type"
+        required: true
+        type: choice
+        default: release
+        options:
+          - release
+          - preview
+          - revision
+      package_revision:
+        description: "Preview/revision number, e.g. 1"
+        required: false
+        type: string
+        default: "1"
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  PACKAGE_ID: Repobot.SQLite.Unofficial
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      sqlite_version: ${{ steps.resolve.outputs.sqlite_version }}
+      sqlite_tag: ${{ steps.resolve.outputs.sqlite_tag }}
+      sqlite_code: ${{ steps.resolve.outputs.sqlite_code }}
+      sqlite_year: ${{ steps.resolve.outputs.sqlite_year }}
+      package_version: ${{ steps.resolve.outputs.package_version }}
+      package_exists: ${{ steps.exists.outputs.package_exists }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      temp_tag: ${{ steps.release.outputs.temp_tag }}
+    steps:
+      - name: Resolve SQLite version
+        id: resolve
+        shell: bash
+        env:
+          SQLITE_VERSION_INPUT: ${{ inputs.sqlite_version || '' }}
+          PACKAGE_TYPE: ${{ inputs.package_type || 'release' }}
+          PACKAGE_REVISION: ${{ inputs.package_revision || '1' }}
+        run: |
+          set -euo pipefail
+
+          input="${SQLITE_VERSION_INPUT}"
+
+          if [ -n "$input" ]; then
+            ver="$input"
+            ver="${ver#version-}"
+            ver="${ver#v}"
+            ver="${ver#V}"
+          else
+            ver="$(curl -fsSL https://api.github.com/repos/sqlite/sqlite/tags \
+              | python3 -c '
+          import json,sys,re
+          tags=json.load(sys.stdin)
+          vals=[]
+          for t in tags:
+              name=t.get("name","")
+              m=re.fullmatch(r"version-(\d+\.\d+\.\d+)", name)
+              if m:
+                  vals.append(tuple(map(int,m.group(1).split("."))))
+          vals.sort()
+          print(".".join(map(str, vals[-1])))
+          ')"
+          fi
+
+          if ! echo "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid SQLite version: $ver" >&2
+            exit 1
+          fi
+
+          IFS=. read -r major minor patch <<< "$ver"
+          code="$(printf "%d%02d%02d00" "$major" "$minor" "$patch")"
+          tag="version-$ver"
+
+          tag_ref="$(curl -fsSL "https://api.github.com/repos/sqlite/sqlite/git/ref/tags/${tag}")"
+          tag_obj_url="$(echo "$tag_ref" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("object",{}).get("url",""))')"
+
+          [ -n "$tag_obj_url" ] || { echo "Failed to resolve SQLite tag object URL" >&2; echo "$tag_ref" >&2; exit 1; }
+
+          tag_obj="$(curl -fsSL "$tag_obj_url")"
+          year="$(echo "$tag_obj" | python3 -c '
+          import json,sys
+          data=json.load(sys.stdin)
+          date=data.get("tagger",{}).get("date","") or data.get("committer",{}).get("date","")
+          print(date[:4])
+          ')"
+
+          if ! echo "$year" | grep -Eq '^[0-9]{4}$'; then
+            echo "Failed to resolve SQLite release year" >&2
+            echo "$tag_obj" >&2
+            exit 1
+          fi
+
+          package_type="${PACKAGE_TYPE}"
+          package_revision="${PACKAGE_REVISION}"
+
+          if ! echo "$package_revision" | grep -Eq '^[0-9]+$'; then
+            echo "Invalid package revision: $package_revision" >&2
+            exit 1
+          fi
+
+          case "$package_type" in
+            release)
+              package_version="$ver"
+              ;;
+            preview)
+              package_version="${ver}-preview.${package_revision}"
+              ;;
+            revision)
+              package_version="${ver}.${package_revision}"
+              ;;
+            *)
+              echo "Invalid package type: $package_type" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "sqlite_version=$ver" >> "$GITHUB_OUTPUT"
+          echo "sqlite_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sqlite_code=$code" >> "$GITHUB_OUTPUT"
+          echo "sqlite_year=$year" >> "$GITHUB_OUTPUT"
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: Check NuGet duplicate
+        id: exists
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          id_lower="$(echo '${{ env.PACKAGE_ID }}' | tr '[:upper:]' '[:lower:]')"
+          ver="${{ steps.resolve.outputs.package_version }}"
+          url="https://api.nuget.org/v3-flatcontainer/${id_lower}/index.json"
+
+          if curl -fsSL "$url" | VER="$ver" python3 -c '
+          import json,sys,os
+          ver=os.environ["VER"].lower()
+          try:
+              data=json.load(sys.stdin)
+              sys.exit(0 if ver in [v.lower() for v in data.get("versions",[])] else 1)
+          except Exception:
+              sys.exit(1)
+          '; then
+            echo "Package ${{ env.PACKAGE_ID }} $ver already exists on NuGet."
+            echo "package_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "package_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create temporary release
+        id: release
+        if: steps.exists.outputs.package_exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="temp-sqlite-nuget-${GITHUB_RUN_ID}"
+          body="Temporary assets for SQLite NuGet build ${GITHUB_RUN_ID}"
+
+          response="$(curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" \
+            -d "{\"tag_name\":\"${tag}\",\"name\":\"${tag}\",\"body\":\"${body}\",\"draft\":true,\"prerelease\":true}")"
+
+          release_id="$(echo "$response" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
+
+          [ -n "$release_id" ] || { echo "Failed to get release_id" >&2; echo "$response" >&2; exit 1; }
+
+          echo "temp_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  build-linux-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-26.04
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
+    steps:
+      - name: Build linux-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          dnf update -y
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-x64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-x64/native
+
+          gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wl,-u,strlcpy \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
+            -flto=auto \
+            -fno-plt \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-x64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          tar -C out -czf native-linux-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-x64.tar.gz"
+
+  build-linux-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-26.04-arm
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
+    steps:
+      - name: Build linux-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          dnf update -y
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-arm64-to-arm64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-arm64/native
+
+          gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wl,-u,strlcpy \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
+            -flto=auto \
+            -fno-plt \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-arm64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          tar -C out -czf native-linux-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-arm64.tar.gz"
+
+  build-linux-riscv64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-26.04
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
+    steps:
+      - name: Build linux-riscv64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          dnf update -y
+          dnf install -y curl unzip tar gzip
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-riscv64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/gcc"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-riscv64/native
+
+          gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wl,-u,strlcpy \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
+            -flto=auto \
+            -fno-plt \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-riscv64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          tar -C out -czf native-linux-riscv64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-riscv64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-riscv64.tar.gz"
+
+  build-linux-sparc64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+    steps:
+      - name: Build linux-sparc64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
+            gcc-sparc64-linux-gnu \
+            binutils-sparc64-linux-gnu \
+            libc6-dev-sparc64-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-sparc64/native
+
+          curl -fL \
+            "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
+            -o sqlite.zip
+
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          sparc64-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-sparc64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-sparc64/native/libe_sqlite3.so
+          sparc64-linux-gnu-readelf -h out/runtimes/linux-sparc64/native/libe_sqlite3.so
+          sparc64-linux-gnu-nm -D out/runtimes/linux-sparc64/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-sparc64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-sparc64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-sparc64.tar.gz"
+
+  build-linux-loongarch64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-26.04
+    container:
+      image: registry.access.redhat.com/ubi10/ubi
+    steps:
+      - name: Build linux-loongarch64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          dnf update -y
+          dnf install -y curl unzip tar gzip file
+
+          curl -fL "https://github.com/xujiegb/gcc-prebuild/releases/download/v1.0.1/gcc-x64-to-loong64.zip" -o toolchain.zip
+          unzip -q toolchain.zip -d toolchain-extracted
+          TOOLCHAIN_DIR=$(ls toolchain-extracted | head -n1)
+          TOOLCHAIN_BIN="$(pwd)/toolchain-extracted/${TOOLCHAIN_DIR}/bin"
+
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-gcc" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-gcc"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-readelf" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-readelf"
+          ln -sf "${TOOLCHAIN_BIN}/${TOOLCHAIN_DIR}-nm" "${TOOLCHAIN_BIN}/loongarch64-linux-gnu-nm"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-loongarch64/native
+
+          loongarch64-linux-gnu-gcc -shared -fPIC -s -O2 \
+            -fvisibility=hidden \
+            -DSQLITE_API="__attribute__((visibility(\"default\")))" \
+            -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wl,-u,strlcpy \
+            -Wl,-z,pack-relative-relocs \
+            -fno-semantic-interposition \
+            -Wl,-Bsymbolic-functions \
+            -flto=auto \
+            -fno-plt \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-loongarch64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-loongarch64/native/libe_sqlite3.so
+          loongarch64-linux-gnu-readelf -h out/runtimes/linux-loongarch64/native/libe_sqlite3.so
+          loongarch64-linux-gnu-nm -D out/runtimes/linux-loongarch64/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-loongarch64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-loongarch64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-loongarch64.tar.gz"
+
+  build-linux-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build linux-x86
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-multilib curl unzip file
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/linux-x86/native
+
+          gcc -m32 -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-x86/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-x86/native/libe_sqlite3.so
+          nm -D out/runtimes/linux-x86/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-x86.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-x86.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-x86.tar.gz"
+
+  build-linux-ppc64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+    steps:
+      - name: Build linux-ppc64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
+            gcc-powerpc64-linux-gnu \
+            binutils-powerpc64-linux-gnu \
+            libc6-dev-ppc64-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-ppc64/native
+
+          curl -fL \
+            "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
+            -o sqlite.zip
+
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          powerpc64-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-ppc64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-ppc64/native/libe_sqlite3.so
+          powerpc64-linux-gnu-readelf -h out/runtimes/linux-ppc64/native/libe_sqlite3.so
+          powerpc64-linux-gnu-nm -D out/runtimes/linux-ppc64/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-ppc64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-ppc64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-ppc64.tar.gz"
+
+  build-linux-ppc64le:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-ppc64le
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file gcc-powerpc64le-linux-gnu binutils-powerpc64le-linux-gnu libc6-dev-ppc64el-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-ppc64le/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          powerpc64le-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-ppc64le/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-ppc64le/native/libe_sqlite3.so
+          powerpc64le-linux-gnu-readelf -h out/runtimes/linux-ppc64le/native/libe_sqlite3.so
+          tar -C out -czf native-linux-ppc64le.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-ppc64le.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-ppc64le.tar.gz"
+
+  build-linux-s390x:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-s390x
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file gcc-s390x-linux-gnu binutils-s390x-linux-gnu libc6-dev-s390x-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-s390x/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          s390x-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-s390x/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-s390x/native/libe_sqlite3.so
+          s390x-linux-gnu-readelf -h out/runtimes/linux-s390x/native/libe_sqlite3.so
+          tar -C out -czf native-linux-s390x.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-s390x.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-s390x.tar.gz"
+
+  build-linux-arm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-arm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf libc6-dev-armhf-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-arm/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          arm-linux-gnueabihf-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-arm/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-arm/native/libe_sqlite3.so
+          arm-linux-gnueabihf-readelf -h out/runtimes/linux-arm/native/libe_sqlite3.so
+          tar -C out -czf native-linux-arm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-arm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-arm.tar.gz"
+
+  build-linux-armel:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-armel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi libc6-dev-armel-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-armel/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          arm-linux-gnueabi-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-armel/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-armel/native/libe_sqlite3.so
+          arm-linux-gnueabi-readelf -h out/runtimes/linux-armel/native/libe_sqlite3.so
+          tar -C out -czf native-linux-armel.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-armel.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-armel.tar.gz"
+
+  build-linux-mips64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-mips64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file gcc-mips64-linux-gnuabi64 binutils-mips64-linux-gnuabi64 libc6-dev-mips64-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-mips64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mips64-linux-gnuabi64-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-mips64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-mips64/native/libe_sqlite3.so
+          mips64-linux-gnuabi64-readelf -h out/runtimes/linux-mips64/native/libe_sqlite3.so
+          tar -C out -czf native-linux-mips64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-mips64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-mips64.tar.gz"
+
+  build-linux-mips64le:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: debian:sid
+    steps:
+      - name: Build linux-mips64le
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl unzip file \
+            gcc-mips64el-linux-gnuabi64 \
+            binutils-mips64el-linux-gnuabi64 \
+            libc6-dev-mips64el-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-mips64le/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mips64el-linux-gnuabi64-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-mips64le/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-mips64le/native/libe_sqlite3.so
+          mips64el-linux-gnuabi64-readelf -h out/runtimes/linux-mips64le/native/libe_sqlite3.so
+          tar -C out -czf native-linux-mips64le.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-mips64le.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-mips64le.tar.gz"
+
+  build-linux-m68k:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+    steps:
+      - name: Build linux-m68k
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y \
+            ca-certificates \
+            curl \
+            unzip \
+            file \
+            gcc-m68k-linux-gnu \
+            binutils-m68k-linux-gnu \
+            libc6-dev-m68k-cross
+
+          mkdir -p sqlite-src out/runtimes/linux-m68k/native
+
+          curl -fL \
+            "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" \
+            -o sqlite.zip
+
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          m68k-linux-gnu-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-m68k/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-m68k/native/libe_sqlite3.so
+          m68k-linux-gnu-readelf -h out/runtimes/linux-m68k/native/libe_sqlite3.so
+          m68k-linux-gnu-nm -D out/runtimes/linux-m68k/native/libe_sqlite3.so | grep ' sqlite3_open'
+
+          tar -C out -czf native-linux-m68k.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-m68k.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-m68k.tar.gz"
+
+  build-linux-musl-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    container: alpine:edge
+    steps:
+      - name: Build linux-musl-x64
+        shell: sh
+        run: |
+          set -eu
+
+          apk add --no-cache build-base curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-x64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-x64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-x64/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-x64.tar.gz"
+
+  build-linux-musl-arm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build linux-musl-arm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          curl --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -fL "https://github.com/autorepobot/muslcc-cross-builder/releases/download/0.0.0.1/armv7l-linux-musleabihf-cross.tgz" \
+            -o musl-cross.tgz
+
+          tar -xzf musl-cross.tgz
+          export PATH="$PWD/armv7l-linux-musleabihf-cross/bin:$PATH"
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-arm/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          armv7l-linux-musleabihf-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-arm/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-arm/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-arm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-arm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-arm.tar.gz"
+
+  build-linux-musl-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04-arm
+    container: alpine:edge
+    steps:
+      - name: Build linux-musl-arm64
+        shell: sh
+        run: |
+          set -eu
+
+          apk add --no-cache build-base curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-arm64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-arm64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-arm64/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-arm64.tar.gz"
+
+  build-linux-musl-riscv64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04-riscv
+    container: alpine:edge
+    steps:
+      - name: Build linux-musl-riscv64
+        shell: sh
+        run: |
+          set -eu
+
+          apk add --no-cache build-base curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-riscv64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-riscv64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-riscv64/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-riscv64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-riscv64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-riscv64.tar.gz"
+
+  build-linux-musl-s390x:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build linux-musl-s390x
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          curl --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 5 \
+            -fL "https://github.com/autorepobot/muslcc-cross-builder/releases/download/0.0.0.1/s390x-linux-musl-cross.tgz" \
+            -o musl-cross.tgz
+
+          tar -xzf musl-cross.tgz
+          export PATH="$PWD/s390x-linux-musl-cross/bin:$PATH"
+
+          mkdir -p sqlite-src out/runtimes/linux-musl-s390x/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          s390x-linux-musl-gcc -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/linux-musl-s390x/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl -lpthread
+
+          file out/runtimes/linux-musl-s390x/native/libe_sqlite3.so
+          tar -C out -czf native-linux-musl-s390x.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-linux-musl-s390x.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-linux-musl-s390x.tar.gz"
+
+  build-freebsd-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Build freebsd-x64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          arch: x86_64
+          sync: rsync
+          usesh: true
+          run: |
+            set -e
+
+            fetch_sqlite() {
+              code="$1"
+              year="$2"
+              mkdir -p sqlite-src
+              url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+              fetch -o sqlite.zip "$url"
+              tar -xf sqlite.zip -C sqlite-src
+            }
+
+            fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+            srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+            mkdir -p out/runtimes/freebsd-x64/native
+
+            cc -shared -fPIC -O2 \
+              -DSQLITE_THREADSAFE=1 \
+              -DSQLITE_ENABLE_FTS5 \
+              -DSQLITE_ENABLE_RTREE \
+              -DSQLITE_ENABLE_JSON1 \
+              -DSQLITE_ENABLE_COLUMN_METADATA \
+              -DSQLITE_USE_URI=1 \
+              -o out/runtimes/freebsd-x64/native/libe_sqlite3.so \
+              "$srcdir/sqlite3.c" -lpthread
+
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-x64/native/libe_sqlite3.so | grep 'sqlite3_close'
+
+            tar -C out -czf native-freebsd-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-freebsd-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-x64.tar.gz"
+
+  build-freebsd-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Build freebsd-arm64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          arch: aarch64
+          sync: rsync
+          usesh: true
+          run: |
+            set -e
+
+            fetch_sqlite() {
+              code="$1"
+              year="$2"
+              mkdir -p sqlite-src
+              url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+              fetch -o sqlite.zip "$url"
+              tar -xf sqlite.zip -C sqlite-src
+            }
+
+            fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+            srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+            mkdir -p out/runtimes/freebsd-arm64/native
+
+            cc -shared -fPIC -O2 \
+              -DSQLITE_THREADSAFE=1 \
+              -DSQLITE_ENABLE_FTS5 \
+              -DSQLITE_ENABLE_RTREE \
+              -DSQLITE_ENABLE_JSON1 \
+              -DSQLITE_ENABLE_COLUMN_METADATA \
+              -DSQLITE_USE_URI=1 \
+              -o out/runtimes/freebsd-arm64/native/libe_sqlite3.so \
+              "$srcdir/sqlite3.c" -lpthread
+
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-arm64/native/libe_sqlite3.so | grep 'sqlite3_close'
+
+            tar -C out -czf native-freebsd-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-freebsd-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-arm64.tar.gz"
+
+  build-freebsd-riscv64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build freebsd-riscv64
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          arch: riscv64
+          sync: scp
+          usesh: true
+          run: |
+            set -e
+
+            fetch_sqlite() {
+              code="$1"
+              year="$2"
+              mkdir -p sqlite-src
+              url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+              fetch -o sqlite.zip "$url"
+              tar -xf sqlite.zip -C sqlite-src
+            }
+
+            fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+            srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+            mkdir -p out/runtimes/freebsd-riscv64/native
+
+            cc -shared -fPIC -O2 \
+              -DSQLITE_THREADSAFE=1 \
+              -DSQLITE_ENABLE_FTS5 \
+              -DSQLITE_ENABLE_RTREE \
+              -DSQLITE_ENABLE_JSON1 \
+              -DSQLITE_ENABLE_COLUMN_METADATA \
+              -DSQLITE_USE_URI=1 \
+              -o out/runtimes/freebsd-riscv64/native/libe_sqlite3.so \
+              "$srcdir/sqlite3.c" -lpthread
+
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_open'
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_prepare_v2'
+            nm -g out/runtimes/freebsd-riscv64/native/libe_sqlite3.so | grep 'sqlite3_close'
+
+            tar -C out -czf native-freebsd-riscv64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-freebsd-riscv64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-freebsd-riscv64.tar.gz"
+
+  build-macos-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Build osx-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/osx-x64/native
+
+          clang -dynamiclib -flto -O2 \
+            -fvisibility=hidden \
+            -mmacosx-version-min=13.5 \
+            -DSQLITE_API='__attribute__((visibility("default")))' \
+            -Wl,-dead_strip \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/osx-x64/native/libe_sqlite3.dylib \
+            "$srcdir/sqlite3.c"
+
+          tar -C out -czf native-osx-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-osx-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-osx-x64.tar.gz"
+
+  build-macos-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15
+    steps:
+      - name: Build osx-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_sqlite() {
+            local code="$1"
+            local year="$2"
+            mkdir -p sqlite-src
+            url="https://www.sqlite.org/${year}/sqlite-amalgamation-${code}.zip"
+            curl -fL "$url" -o sqlite.zip
+            unzip -q sqlite.zip -d sqlite-src
+          }
+
+          fetch_sqlite "${{ needs.resolve.outputs.sqlite_code }}" "${{ needs.resolve.outputs.sqlite_year }}"
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          mkdir -p out/runtimes/osx-arm64/native
+
+          clang -dynamiclib -flto -O2 \
+            -fvisibility=hidden \
+            -mmacosx-version-min=13.5 \
+            -DSQLITE_API='__attribute__((visibility("default")))' \
+            -Wl,-dead_strip \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/osx-arm64/native/libe_sqlite3.dylib \
+            "$srcdir/sqlite3.c"
+
+          tar -C out -czf native-osx-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-osx-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-osx-arm64.tar.gz"
+
+  build-maccatalyst-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15
+    steps:
+      - name: Build maccatalyst-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/maccatalyst-arm64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk macosx clang -target arm64-apple-ios17.0-macabi -dynamiclib -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/maccatalyst-arm64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c"
+
+          file out/runtimes/maccatalyst-arm64/native/libe_sqlite3.so
+          tar -C out -czf native-maccatalyst-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-maccatalyst-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-maccatalyst-arm64.tar.gz"
+
+  build-maccatalyst-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Build maccatalyst-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/maccatalyst-x64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk macosx clang -target x86_64-apple-ios17.0-macabi -dynamiclib -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/maccatalyst-x64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c"
+
+          file out/runtimes/maccatalyst-x64/native/libe_sqlite3.so
+          tar -C out -czf native-maccatalyst-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-maccatalyst-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-maccatalyst-x64.tar.gz"
+
+  build-iossimulator-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15
+    steps:
+      - name: Build iossimulator-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/iossimulator-arm64/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=12.0 -O2 -c \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          xcrun --sdk iphonesimulator ar rcs out/runtimes/iossimulator-arm64/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/iossimulator-arm64/native/e_sqlite3.a
+          tar -C out -czf native-iossimulator-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-iossimulator-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-iossimulator-arm64.tar.gz"
+
+  build-iossimulator-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Build iossimulator-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/iossimulator-x64/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk iphonesimulator clang -arch x86_64 -mios-simulator-version-min=12.0 -O2 -c \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          xcrun --sdk iphonesimulator ar rcs out/runtimes/iossimulator-x64/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/iossimulator-x64/native/e_sqlite3.a
+          tar -C out -czf native-iossimulator-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-iossimulator-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-iossimulator-x64.tar.gz"
+
+  build-iossimulator-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Build iossimulator-x86
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/iossimulator-x86/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk iphonesimulator clang -arch i386 -mios-simulator-version-min=10.0 -O2 -c \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          xcrun --sdk iphonesimulator ar rcs out/runtimes/iossimulator-x86/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/iossimulator-x86/native/e_sqlite3.a
+          tar -C out -czf native-iossimulator-x86.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-iossimulator-x86.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-iossimulator-x86.tar.gz"
+
+  build-ios-arm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Build ios-arm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/ios-arm/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk iphoneos clang -arch armv7 -miphoneos-version-min=10.0 -O2 -c \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          xcrun --sdk iphoneos ar rcs out/runtimes/ios-arm/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/ios-arm/native/e_sqlite3.a
+          tar -C out -czf native-ios-arm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-ios-arm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-ios-arm.tar.gz"
+
+  build-ios-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: macos-15
+    steps:
+      - name: Build ios-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p sqlite-src out/runtimes/ios-arm64/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=12.0 -O2 -c \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          xcrun --sdk iphoneos ar rcs out/runtimes/ios-arm64/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/ios-arm64/native/e_sqlite3.a
+          tar -C out -czf native-ios-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-ios-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-ios-arm64.tar.gz"
+
+  build-android-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build android-x86
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/android-x86/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          cc="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android23-clang"
+
+          "$cc" -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/android-x86/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl
+
+          file out/runtimes/android-x86/native/libe_sqlite3.so
+          tar -C out -czf native-android-x86.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-android-x86.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-android-x86.tar.gz"
+
+  build-android-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build android-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/android-x64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          cc="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android23-clang"
+
+          "$cc" -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/android-x64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl
+
+          file out/runtimes/android-x64/native/libe_sqlite3.so
+          tar -C out -czf native-android-x64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-android-x64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-android-x64.tar.gz"
+
+  build-android-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build android-arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/android-arm64/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          cc="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android23-clang"
+
+          "$cc" -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/android-arm64/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl
+
+          file out/runtimes/android-arm64/native/libe_sqlite3.so
+          tar -C out -czf native-android-arm64.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-android-arm64.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-android-arm64.tar.gz"
+
+  build-android-arm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Build android-arm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/android-arm/native
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          cc="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi23-clang"
+
+          "$cc" -shared -fPIC -O2 \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            -o out/runtimes/android-arm/native/libe_sqlite3.so \
+            "$srcdir/sqlite3.c" -ldl
+
+          file out/runtimes/android-arm/native/libe_sqlite3.so
+          tar -C out -czf native-android-arm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-android-arm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-android-arm.tar.gz"
+
+  build-browser-wasm:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build browser-wasm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl unzip file
+
+          mkdir -p sqlite-src out/runtimes/browser-wasm/native build
+          curl -fL "https://www.sqlite.org/${{ needs.resolve.outputs.sqlite_year }}/sqlite-amalgamation-${{ needs.resolve.outputs.sqlite_code }}.zip" -o sqlite.zip
+          unzip -q sqlite.zip -d sqlite-src
+          srcdir="$(find sqlite-src -maxdepth 1 -type d -name 'sqlite-amalgamation-*' | head -n1)"
+
+          emcc -O2 -c \
+            -DSQLITE_THREADSAFE=0 \
+            -DSQLITE_ENABLE_FTS5 \
+            -DSQLITE_ENABLE_RTREE \
+            -DSQLITE_ENABLE_JSON1 \
+            -DSQLITE_ENABLE_COLUMN_METADATA \
+            -DSQLITE_USE_URI=1 \
+            "$srcdir/sqlite3.c" -o build/sqlite3.o
+
+          emar rcs out/runtimes/browser-wasm/native/e_sqlite3.a build/sqlite3.o
+          file out/runtimes/browser-wasm/native/e_sqlite3.a
+          tar -C out -czf native-browser-wasm.tar.gz .
+
+      - name: Upload temporary asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Content-Type: application/gzip" \
+            --data-binary @native-browser-wasm.tar.gz \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-browser-wasm.tar.gz"
+
+  build-windows-x64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: windows-2025
+    steps:
+      - name: Build win-x64
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $code = "${{ needs.resolve.outputs.sqlite_code }}"
+          $year = "${{ needs.resolve.outputs.sqlite_year }}"
+          $url = "https://www.sqlite.org/$year/sqlite-amalgamation-$code.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+
+          if (!(Test-Path sqlite.zip)) {
+            throw "Failed to download SQLite amalgamation"
+          }
+
+          Expand-Archive sqlite.zip -DestinationPath sqlite-src -Force
+          $srcdir = Get-ChildItem sqlite-src -Directory | Where-Object { $_.Name -like "sqlite-amalgamation-*" } | Select-Object -First 1
+
+          New-Item -ItemType Directory -Force -Path out\runtimes\win-x64\native | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsinstall = & $vswhere -latest -products * -property installationPath
+
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x64 && cl /LD /O2 /GL /Oi /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OPT:REF /OPT:ICF /OUT:out\runtimes\win-x64\native\e_sqlite3.dll"
+
+          if (!(Test-Path "out\runtimes\win-x64\native\e_sqlite3.dll")) {
+            throw "DLL not found, build likely failed"
+          }
+
+          Compress-Archive -Path out\* -DestinationPath native-win-x64.zip -Force
+
+      - name: Upload temporary asset
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl.exe -f -s -S `
+            -X POST `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary "@native-win-x64.zip" `
+            "https://uploads.github.com/repos/${env:GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-win-x64.zip"
+
+  build-windows-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: windows-11-arm
+    steps:
+      - name: Build win-arm64
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $code = "${{ needs.resolve.outputs.sqlite_code }}"
+          $year = "${{ needs.resolve.outputs.sqlite_year }}"
+          $url = "https://www.sqlite.org/$year/sqlite-amalgamation-$code.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+
+          if (!(Test-Path sqlite.zip)) {
+            throw "Failed to download SQLite amalgamation"
+          }
+
+          Expand-Archive sqlite.zip -DestinationPath sqlite-src -Force
+          $srcdir = Get-ChildItem sqlite-src -Directory | Where-Object { $_.Name -like "sqlite-amalgamation-*" } | Select-Object -First 1
+
+          New-Item -ItemType Directory -Force -Path out\runtimes\win-arm64\native | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsinstall = & $vswhere -latest -products * -property installationPath
+
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" arm64 && cl /LD /O2 /GL /Oi /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OPT:REF /OPT:ICF /OUT:out\runtimes\win-arm64\native\e_sqlite3.dll"
+
+          if (!(Test-Path "out\runtimes\win-arm64\native\e_sqlite3.dll")) {
+            throw "DLL not found, build likely failed"
+          }
+
+          Compress-Archive -Path out\* -DestinationPath native-win-arm64.zip -Force
+
+      - name: Upload temporary asset
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl.exe -f -s -S `
+            -X POST `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary "@native-win-arm64.zip" `
+            "https://uploads.github.com/repos/${env:GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-win-arm64.zip"
+
+  build-windows-x86:
+    needs: resolve
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: windows-2025
+    steps:
+      - name: Build win-x86
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $code = "${{ needs.resolve.outputs.sqlite_code }}"
+          $year = "${{ needs.resolve.outputs.sqlite_year }}"
+          $url = "https://www.sqlite.org/$year/sqlite-amalgamation-$code.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+
+          if (!(Test-Path sqlite.zip)) {
+            throw "Failed to download SQLite amalgamation"
+          }
+
+          Expand-Archive sqlite.zip -DestinationPath sqlite-src -Force
+          $srcdir = Get-ChildItem sqlite-src -Directory | Where-Object { $_.Name -like "sqlite-amalgamation-*" } | Select-Object -First 1
+
+          New-Item -ItemType Directory -Force -Path out\runtimes\win-x86\native | Out-Null
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsinstall = & $vswhere -latest -products * -property installationPath
+
+          cmd /c "`"$vsinstall\VC\Auxiliary\Build\vcvarsall.bat`" x86 && cl /LD /O2 /GL /Oi /nologo /DSQLITE_API=__declspec(dllexport) /DSQLITE_THREADSAFE=1 /DSQLITE_ENABLE_FTS5 /DSQLITE_ENABLE_RTREE /DSQLITE_ENABLE_JSON1 /DSQLITE_ENABLE_COLUMN_METADATA /DSQLITE_USE_URI=1 `"$($srcdir.FullName)\sqlite3.c`" /link /LTCG /OPT:REF /OPT:ICF /OUT:out\runtimes\win-x86\native\e_sqlite3.dll"
+          
+          if (!(Test-Path "out\runtimes\win-x86\native\e_sqlite3.dll")) {
+            throw "DLL not found, build likely failed"
+          }
+
+          Compress-Archive -Path out\* -DestinationPath native-win-x86.zip -Force
+
+      - name: Upload temporary asset
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl.exe -f -s -S `
+            -X POST `
+            -H "Authorization: Bearer $env:GH_TOKEN" `
+            -H "Content-Type: application/zip" `
+            --data-binary "@native-win-x86.zip" `
+            "https://uploads.github.com/repos/${env:GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?name=native-win-x86.zip"
+
+  pack-and-publish:
+    needs:
+      - resolve
+      - build-linux-x64
+      - build-linux-x86
+      - build-linux-arm64
+      - build-linux-riscv64
+      - build-linux-loongarch64
+      - build-linux-ppc64
+      - build-linux-ppc64le
+      - build-linux-s390x
+      - build-linux-sparc64
+      - build-linux-arm
+      - build-linux-armel
+      - build-linux-m68k
+      - build-linux-mips64
+      - build-linux-mips64le
+      - build-linux-musl-arm
+      - build-linux-musl-x64
+      - build-linux-musl-arm64
+      - build-linux-musl-riscv64
+      - build-linux-musl-s390x
+      - build-freebsd-x64
+      - build-freebsd-arm64
+      - build-freebsd-riscv64
+      - build-macos-x64
+      - build-macos-arm64
+      - build-maccatalyst-arm64
+      - build-maccatalyst-x64
+      - build-iossimulator-arm64
+      - build-iossimulator-x64
+      - build-iossimulator-x86
+      - build-ios-arm
+      - build-ios-arm64
+      - build-android-x86
+      - build-android-x64
+      - build-android-arm64
+      - build-android-arm
+      - build-browser-wasm
+      - build-windows-x64
+      - build-windows-arm64
+      - build-windows-x86
+    if: needs.resolve.outputs.package_exists != 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download temporary assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p assets package
+
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}/assets?per_page=100"
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" > assets.json
+
+          python3 - <<'PY'
+          import json, subprocess, os
+          data=json.load(open("assets.json"))
+          os.makedirs("assets", exist_ok=True)
+          for a in data:
+              name=a["name"]
+              url=a["url"]
+              subprocess.check_call([
+                  "curl","-fsSL",
+                  "-H",f"Authorization: Bearer {os.environ['GH_TOKEN']}",
+                  "-H","Accept: application/octet-stream",
+                  "-o",f"assets/{name}",
+                  url
+              ])
+          PY
+
+          for f in assets/*.tar.gz; do
+            [ -e "$f" ] || continue
+            tar -C package -xzf "$f"
+          done
+
+          for f in assets/*.zip; do
+            [ -e "$f" ] || continue
+            python3 - "$f" <<'PY'
+          import sys, zipfile, pathlib
+
+          zip_path = sys.argv[1]
+          out_dir = pathlib.Path("package")
+
+          with zipfile.ZipFile(zip_path) as z:
+              for info in z.infolist():
+                  name = info.filename.replace("\\", "/")
+                  if name.endswith("/"):
+                      continue
+                  target = out_dir / name
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  with z.open(info) as src, open(target, "wb") as dst:
+                      dst.write(src.read())
+          PY
+          done
+
+      - name: Create package files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > package/README.md <<'EOF'
+          # Repobot.SQLite.Unofficial
+
+          Unofficial SQLite native runtime package for .NET.
+
+          This package is automatically built from upstream SQLite source using GitHub Actions.
+
+          - Not affiliated with SQLite.org
+          - No warranty
+          - No support commitment
+          - Use at your own risk
+          EOF
+
+          cat > package/${{ env.PACKAGE_ID }}.nuspec <<EOF
+          <?xml version="1.0"?>
+          <package>
+            <metadata>
+              <id>${{ env.PACKAGE_ID }}</id>
+              <version>${{ needs.resolve.outputs.package_version }}</version>
+              <authors>Repobot</authors>
+              <owners>Repobot</owners>
+              <license type="expression">Unlicense</license>
+              <projectUrl>https://github.com/${{ github.repository }}</projectUrl>
+              <repository type="git" url="https://github.com/${{ github.repository }}" />
+              <description>Unofficial SQLite native runtime package for .NET. Not affiliated with SQLite.org.</description>
+              <tags>sqlite sqlite3 native e_sqlite3 unofficial</tags>
+              <readme>README.md</readme>
+            </metadata>
+            <files>
+              <file src="README.md" target="" />
+              <file src="runtimes/**" target="runtimes" />
+            </files>
+          </package>
+          EOF
+
+      - name: Install NuGet
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o nuget.exe
+          sudo apt-get update
+          sudo apt-get install -y mono-complete
+
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          mono nuget.exe pack "package/${{ env.PACKAGE_ID }}.nuspec" -OutputDirectory artifacts
+
+      - name: Publish to NuGet.org
+        shell: bash
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          dotnet nuget push "artifacts/*.nupkg" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+      - name: Delete temporary release
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          curl -fsSL \
+            -X DELETE \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${{ needs.resolve.outputs.release_id }}"
+
+          curl -fsSL \
+            -X DELETE \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/refs/tags/${{ needs.resolve.outputs.temp_tag }}"
+
+          exit 0
